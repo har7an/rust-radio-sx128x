@@ -75,10 +75,10 @@ toml = "0.5.8"
 serde = { version = "1.0.126", features = [ "derive" ] }
 serde_derive = "1.0.0"
 
-[[bin]]
-name = "sx128x-util"
-path = "src/util/main.rs"
-required-features = ["util"]
+#[[bin]]
+#name = "sx128x-util"
+#path = "src/util/main.rs"
+#required-features = ["util"]
 
 
 [patch.crates-io]
