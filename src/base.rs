@@ -4,14 +4,14 @@ use core::fmt::Debug;
 
 use log::{error, trace};
 
-use embedded_hal::digital::PinState;
 use embedded_hal::digital::blocking::{InputPin, OutputPin};
-
+use embedded_hal::digital::PinState;
 
 use embedded_hal::delay::blocking::DelayUs;
-use embedded_hal::spi::blocking::{Transactional, Operation};
+//use embedded_hal::spi::blocking::{Transactional, Operation};
+use embedded_hal::spi::blocking::{SpiBusRead, SpiBusWrite, SpiDevice};
 
-use crate::{device::*, SpiBase};
+use crate::device::*;
 use crate::Error;
 
 /// Hal implementation can be generic over SPI or UART connections
@@ -24,10 +24,14 @@ pub trait Hal {
     fn reset(&mut self) -> Result<(), Error<Self::CommsError, Self::PinError, Self::DelayError>>;
 
     /// Fetch radio device busy pin value
-    fn get_busy(&mut self) -> Result<PinState, Error<Self::CommsError, Self::PinError, Self::DelayError>>;
+    fn get_busy(
+        &mut self,
+    ) -> Result<PinState, Error<Self::CommsError, Self::PinError, Self::DelayError>>;
 
     /// Fetch radio device ready / irq (DIO) pin value
-    fn get_dio(&mut self) -> Result<PinState, Error<Self::CommsError, Self::PinError, Self::DelayError>>;
+    fn get_dio(
+        &mut self,
+    ) -> Result<PinState, Error<Self::CommsError, Self::PinError, Self::DelayError>>;
 
     /// Delay for the specified time
     fn delay_ms(&mut self, ms: u32) -> Result<(), Self::DelayError>;
@@ -76,7 +80,9 @@ pub trait Hal {
     ) -> Result<(), Error<Self::CommsError, Self::PinError, Self::DelayError>>;
 
     /// Wait on radio device busy
-    fn wait_busy(&mut self) -> Result<(), Error<Self::CommsError, Self::PinError, Self::DelayError>> {
+    fn wait_busy(
+        &mut self,
+    ) -> Result<(), Error<Self::CommsError, Self::PinError, Self::DelayError>> {
         // TODO: timeouts here
         let mut timeout = 0;
         while self.get_busy()? == PinState::High {
@@ -93,7 +99,10 @@ pub trait Hal {
     }
 
     /// Read a single u8 value from the specified register
-    fn read_reg(&mut self, reg: u16) -> Result<u8, Error<Self::CommsError, Self::PinError, Self::DelayError>> {
+    fn read_reg(
+        &mut self,
+        reg: u16,
+    ) -> Result<u8, Error<Self::CommsError, Self::PinError, Self::DelayError>> {
         let mut incoming = [0u8; 1];
         self.read_regs(reg.into(), &mut incoming)?;
         Ok(incoming[0])
@@ -122,16 +131,24 @@ pub trait Hal {
         Ok(updated)
     }
 
-    fn prefix_read(&mut self, prefix: &[u8], data: &mut [u8]) -> Result<(), Error<Self::CommsError, Self::PinError, Self::DelayError>>;
+    fn prefix_read(
+        &mut self,
+        prefix: &[u8],
+        data: &mut [u8],
+    ) -> Result<(), Error<Self::CommsError, Self::PinError, Self::DelayError>>;
 
-    fn prefix_write(&mut self, prefix: &[u8], data: &[u8]) -> Result<(), Error<Self::CommsError, Self::PinError, Self::DelayError>>;
+    fn prefix_write(
+        &mut self,
+        prefix: &[u8],
+        data: &[u8],
+    ) -> Result<(), Error<Self::CommsError, Self::PinError, Self::DelayError>>;
 }
 
 pub trait HalError {
     type E: Debug;
 }
 
-impl <T> HalError for T
+impl<T> HalError for T
 where
     T: Hal,
 {
@@ -139,57 +156,59 @@ where
 }
 
 /// Base interface for radio device
-pub struct Base <Spi: SpiBase, Cs: OutputPin, Busy: InputPin, Ready: InputPin, Sdn: OutputPin, Delay: DelayUs> {
+pub struct Base<Spi: SpiDevice, Busy: InputPin, Ready: InputPin, Sdn: OutputPin, Delay: DelayUs> {
     pub spi: Spi,
-    pub cs: Cs,
     pub busy: Busy,
     pub ready: Ready,
     pub sdn: Sdn,
     pub delay: Delay,
 }
 
-
-impl<Spi, Cs, Busy, Ready, Sdn, PinError, Delay> Hal for Base<Spi, Cs, Busy, Ready, Sdn, Delay>
+impl<Spi, Busy, Ready, Sdn, PinError, Delay> Hal for Base<Spi, Busy, Ready, Sdn, Delay>
 where
-    Spi: SpiBase,
-    <Spi as SpiBase>::Error: Debug + 'static,
-    
-    Cs: OutputPin<Error=PinError>,
-    Busy: InputPin<Error=PinError>,
-    Ready: InputPin<Error=PinError>,
-    Sdn: OutputPin<Error=PinError>,
+    Spi: SpiDevice,
+    Spi::Bus: SpiBusRead + SpiBusWrite,
+    Spi::Error: Debug + 'static,
+
+    Busy: InputPin<Error = PinError>,
+    Ready: InputPin<Error = PinError>,
+    Sdn: OutputPin<Error = PinError>,
     PinError: Debug + 'static,
 
     Delay: DelayUs,
     <Delay as DelayUs>::Error: Debug + 'static,
 {
-    type CommsError = <Spi as SpiBase>::Error;
+    type CommsError = Spi::Error;
     type PinError = PinError;
     type DelayError = <Delay as DelayUs>::Error;
 
     /// Reset the radio
     fn reset(&mut self) -> Result<(), Error<Self::CommsError, Self::PinError, Self::DelayError>> {
         self.delay_ms(20).map_err(Error::Delay)?;
-        
+
         self.sdn.set_low().map_err(Error::Pin)?;
-        
+
         self.delay_ms(50).map_err(Error::Delay)?;
-        
+
         self.sdn.set_high().map_err(Error::Pin)?;
-        
+
         self.delay_ms(20).map_err(Error::Delay)?;
 
         Ok(())
     }
 
-    fn get_busy(&mut self) -> Result<PinState, Error<Self::CommsError, Self::PinError, Self::DelayError>> {
+    fn get_busy(
+        &mut self,
+    ) -> Result<PinState, Error<Self::CommsError, Self::PinError, Self::DelayError>> {
         match self.busy.is_high().map_err(Error::Pin)? {
             true => Ok(PinState::High),
             false => Ok(PinState::Low),
         }
     }
 
-    fn get_dio(&mut self) -> Result<PinState, Error<Self::CommsError, Self::PinError, Self::DelayError>> {
+    fn get_dio(
+        &mut self,
+    ) -> Result<PinState, Error<Self::CommsError, Self::PinError, Self::DelayError>> {
         match self.ready.is_high().map_err(Error::Pin)? {
             true => Ok(PinState::High),
             false => Ok(PinState::Low),
@@ -206,32 +225,26 @@ where
         self.delay.delay_us(ms)
     }
 
-    /// Write data with prefix, asserting CS as required
-    fn prefix_write(&mut self, prefix: &[u8], data: &[u8]) -> Result<(), Error<Self::CommsError, Self::PinError, Self::DelayError>> {
-        self.cs.set_low().map_err(Error::Pin)?;
-
-        let r = self.spi.exec(&mut [
-            Operation::Write(prefix),
-            Operation::Write(data),
-        ]).map_err(Error::Comms);
-
-        self.cs.set_high().map_err(Error::Pin)?;
-
-        r
+    /// Write data with prefix, CS is managed by embedded-hal
+    fn prefix_write(
+        &mut self,
+        prefix: &[u8],
+        data: &[u8],
+    ) -> Result<(), Error<Self::CommsError, Self::PinError, Self::DelayError>> {
+        self.spi.write(prefix).map_err(Error::Comms)?;
+        self.spi.write(data).map_err(Error::Comms)?;
+        Ok(())
     }
 
-    /// Read data with prefix, asserting CS as required
-    fn prefix_read(&mut self, prefix: &[u8], data: &mut [u8]) -> Result<(), Error<Self::CommsError, Self::PinError, Self::DelayError>> {
-        self.cs.set_low().map_err(Error::Pin)?;
-
-        let r = self.spi.exec(&mut [
-            Operation::Write(prefix),
-            Operation::Read(data),
-        ]).map_err(Error::Comms);
-
-        self.cs.set_high().map_err(Error::Pin)?;
-
-        r
+    /// Read data with prefix, CS is managed by embedded-hal
+    fn prefix_read(
+        &mut self,
+        prefix: &[u8],
+        data: &mut [u8],
+    ) -> Result<(), Error<Self::CommsError, Self::PinError, Self::DelayError>> {
+        self.spi.write(prefix).map_err(Error::Comms)?;
+        self.spi.read(data).map_err(Error::Comms)?;
+        Ok(())
     }
 
     /// Write the specified command and data
@@ -248,7 +261,7 @@ where
         self.wait_busy()?;
 
         let r = self.prefix_write(&out_buf, data);
-        
+
         self.wait_busy()?;
         r
     }
@@ -263,9 +276,9 @@ where
         let out_buf: [u8; 2] = [command as u8, 0x00];
 
         self.wait_busy()?;
-        
+
         let r = self.prefix_read(&out_buf, data);
-        
+
         self.wait_busy()?;
 
         trace!("read_cmd cmd: {:02x?} data: {:02x?}", out_buf, data);
@@ -289,7 +302,7 @@ where
         trace!("write_regs cmd: {:02x?} data: {:02x?}", out_buf, data);
 
         self.wait_busy()?;
-        
+
         let r = self.prefix_write(&out_buf, data);
 
         self.wait_busy()?;
@@ -311,7 +324,7 @@ where
         ];
 
         self.wait_busy()?;
-        
+
         let r = self.prefix_read(&out_buf, data);
 
         self.wait_busy()?;
@@ -333,7 +346,7 @@ where
         trace!("write_buff cmd: {:02x?}", out_buf);
 
         self.wait_busy()?;
-        
+
         let r = self.prefix_write(&out_buf, data);
 
         self.wait_busy()?;
@@ -351,7 +364,7 @@ where
         trace!(" data: {:02x?}", out_buf);
 
         self.wait_busy()?;
-        
+
         let r = self.prefix_read(&out_buf, data);
 
         self.wait_busy()?;
