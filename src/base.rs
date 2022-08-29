@@ -231,8 +231,10 @@ where
         prefix: &[u8],
         data: &[u8],
     ) -> Result<(), Error<Self::CommsError, Self::PinError, Self::DelayError>> {
-        self.spi.write(prefix).map_err(Error::Comms)?;
-        self.spi.write(data).map_err(Error::Comms)?;
+        self.spi.transaction(|bus| {
+            bus.write(prefix)?;
+            bus.write(data)
+        }).map_err(Error::Comms)?;
         Ok(())
     }
 
@@ -242,8 +244,10 @@ where
         prefix: &[u8],
         data: &mut [u8],
     ) -> Result<(), Error<Self::CommsError, Self::PinError, Self::DelayError>> {
-        self.spi.write(prefix).map_err(Error::Comms)?;
-        self.spi.read(data).map_err(Error::Comms)?;
+        self.spi.transaction(|bus| {
+            bus.write(prefix)?;
+            bus.read(data)
+        }).map_err(Error::Comms)?;
         Ok(())
     }
 
